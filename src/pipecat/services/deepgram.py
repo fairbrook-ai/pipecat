@@ -5,6 +5,7 @@
 #
 
 import asyncio
+import time
 from typing import AsyncGenerator
 
 from loguru import logger
@@ -19,11 +20,12 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     TTSAudioRawFrame,
     TTSStartedFrame,
-    TTSStoppedFrame,
+    TTSStoppedFrame, DeepgramFinalTranscriptionFrame, DeepgramInterimTranscriptionFrame,
 )
 from pipecat.services.ai_services import STTService, TTSService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.time import time_now_iso8601
+from pydantic.dataclasses import dataclass
 
 # See .env.example for Deepgram configuration needed
 try:
@@ -155,6 +157,8 @@ class DeepgramSTTService(STTService):
             self._connection.on(LiveTranscriptionEvents.SpeechStarted, self._on_speech_started)
             self._connection.on(LiveTranscriptionEvents.UtteranceEnd, self._on_utterance_end)
 
+        self.audio_stream_start_time_ms: float | None = None
+
     @property
     def vad_enabled(self):
         return self._settings["vad_events"]
@@ -188,6 +192,10 @@ class DeepgramSTTService(STTService):
         await self._disconnect()
 
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
+        # logger.debug(f"Sending audio to Deepgram: {len(audio)} bytes")
+        if not self.audio_stream_start_time_ms:
+            self.audio_stream_start_time_ms = time.time() * 1000
+            logger.debug(f"Audio stream start time set to current time: {self.audio_stream_start_time_ms}")
         await self._connection.send(audio)
         yield None
 
@@ -199,6 +207,7 @@ class DeepgramSTTService(STTService):
     async def _disconnect(self):
         if self._connection.is_connected:
             logger.debug("Disconnecting from Deepgram")
+            self.audio_stream_start_time_ms = None
             await self._connection.finish()
 
     async def _on_speech_started(self, *args, **kwargs):
@@ -216,17 +225,45 @@ class DeepgramSTTService(STTService):
         is_final = result.is_final
         transcript = result.channel.alternatives[0].transcript
         language = None
+
+        # print(f"Deepgram on_message: {result.start}")
+        # print(f"Deepgram on_message: got {"final" if is_final else "interim"} transcript: {transcript} - start: {result.start}")
+        # print(f"Got words: {result.channel.alternatives[0].words}")
         if result.channel.alternatives[0].languages:
             language = result.channel.alternatives[0].languages[0]
             language = Language(language)
         if len(transcript) > 0:
+            print(
+                f"Deepgram on_message: got {"final" if is_final else "interim"} transcript: {transcript} | start: {result.start} | duration: {result.duration} | start+duration: {result.start + result.duration} | words: {result.channel.alternatives[0].words}"
+            )
+            # print(f"Deepgram on_message: got result: {result}")
             await self.stop_ttfb_metrics()
             if is_final:
                 await self.push_frame(
-                    TranscriptionFrame(transcript, "", time_now_iso8601(), language)
+                    DeepgramFinalTranscriptionFrame(
+                        text=transcript,
+                        user_id="",
+                        timestamp=time_now_iso8601(),
+                        language=language,
+                        start=result.start,
+                        absolute_start_time_ms=(self.audio_stream_start_time_ms + result.start * 1000) if self.audio_stream_start_time_ms else None,
+                        duration=result.duration,
+                        confidence=result.channel.alternatives[0].confidence,
+                        words=result.channel.alternatives[0].words,
+                    )
                 )
                 await self.stop_processing_metrics()
             else:
                 await self.push_frame(
-                    InterimTranscriptionFrame(transcript, "", time_now_iso8601(), language)
+                    DeepgramInterimTranscriptionFrame(
+                        text=transcript,
+                        user_id="",
+                        timestamp=time_now_iso8601(),
+                        language=language,
+                        start=result.start,
+                        absolute_start_time_ms=(self.audio_stream_start_time_ms + result.start * 1000) if self.audio_stream_start_time_ms else None,
+                        duration=result.duration,
+                        confidence=result.channel.alternatives[0].confidence,
+                        words=result.channel.alternatives[0].words,
+                    )
                 )

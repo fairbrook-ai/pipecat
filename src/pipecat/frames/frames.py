@@ -7,6 +7,8 @@
 from dataclasses import dataclass, field
 from typing import Any, List, Mapping, Optional, Tuple
 
+from deepgram.clients.listen.v1 import ListenWSWord
+
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.clocks.base_clock import BaseClock
 from pipecat.metrics.metrics import MetricsData
@@ -204,6 +206,28 @@ class InterimTranscriptionFrame(TextFrame):
 
     def __str__(self):
         return f"{self.name}(user: {self.user_id}, text: [{self.text}], language: {self.language}, timestamp: {self.timestamp})"
+
+
+@dataclass(kw_only=True)
+class DeepgramInterimTranscriptionFrame(InterimTranscriptionFrame):
+    """Frame containing interim transcription data from Deepgram."""
+
+    start: float
+    absolute_start_time_ms: float | None
+    duration: float
+    confidence: float
+    words: List[ListenWSWord] = field(default_factory=list)
+
+
+@dataclass(kw_only=True)
+class DeepgramFinalTranscriptionFrame(TranscriptionFrame):
+    """Frame containing final transcription data from Deepgram."""
+
+    start: float
+    absolute_start_time_ms: float | None
+    duration: float
+    confidence: float
+    words: List[ListenWSWord] = field(default_factory=list)
 
 
 @dataclass
