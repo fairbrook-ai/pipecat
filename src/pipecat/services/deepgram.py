@@ -207,7 +207,7 @@ class DeepgramSTTService(STTService):
     async def _disconnect(self):
         if self._connection.is_connected:
             logger.debug("Disconnecting from Deepgram")
-            self.audio_stream_start_time_ms = None
+            # self.audio_stream_start_time_ms = None
             await self._connection.finish()
 
     async def _on_speech_started(self, *args, **kwargs):
